@@ -1,9 +1,9 @@
 ---
 name: validate-rdf-iolanta
-description: Validates RDF documents using Iolanta. Requires a file path (explicit or inferred from context). Runs iolanta on Turtle/RDF files, interprets labeled-triple-set output and feedback, and addresses issues (e.g. missing rdfs:label). Use when the user asks to validate RDF, validate a TTL file (e.g. "validate another-order.ttl"), check ontology or data, or run iolanta.
+description: Validates RDF documents using Iolanta kglint. Requires a file path (explicit or inferred from context). Runs iolanta on Turtle/RDF files with --as kglint/json, interprets assertions and labels, and addresses issues (e.g. missing rdfs:label). Use when the user asks to validate RDF, validate a TTL file (e.g. "validate another-order.ttl"), check ontology or data, or run iolanta.
 ---
 
-# Validate RDF with Iolanta
+# Validate RDF with Iolanta (kglint)
 
 ## Argument: file path
 
@@ -15,38 +15,54 @@ The file path to validate is provided by the user. Determine it in this order:
 
 ## How validation works
 
-Iolanta loads the **whole directory** in which the requested file is located (not just that file). All TTL/ontology files in that directory are in scope.
+Iolanta loads the **whole directory** in which the requested file is located (not just that file). All TTL/ontology files in that directory are in scope. Validation uses the **kglint** facet, which outputs a report with **assertions** (lint findings) and **labels** (nodes and their triples).
 
 ## Command
 
 ```bash
-iolanta <file> --as labeled-triple-set
+iolanta <file> --as kglint/json
 ```
 
-Example: `iolanta another-order.ttl --as labeled-triple-set`
+Example: `iolanta another-order.ttl --as kglint/json`
 
-## Interpreting output
+**Timeout:** Iolanta loads the directory and may pull remote content (e.g. Wikidata, schema.org). Use the **maximum timeout** the tooling supports when running this command (e.g. 600000 ms / 10 minutes) so validation can complete. Do not conclude the TTL is valid without successfully running Iolanta and checking the report.
 
-- Output is JSON: an array of triples. Each triple has `subject`, `predicate`, `object_`, each with `feedback`, `type`, `uri`/`value`, and `label`.
-- **Empty `feedback`** (`"feedback": []`) → no issue.
-- **Non-empty `feedback`** → something to fix. Typical message: *"For this URI, the label is the same as the URI. We were unable to render that URI."*
-  - Usually means the URI (often a predicate or class from the ontology) has no `rdfs:label` in the loaded data. Add `rdfs:label "Human Readable Name"@en` in the **ontology** (e.g. `KGCPMart-OWL.ttl`) for that property or class.
+## Kglint output schema
+
+The output is a JSON object with two top-level keys:
+
+- **`assertions`** — Array of lint findings. **Empty `[]` = validation pass.** Each assertion has:
+  - `severity`: `"error"` or `"warning"`
+  - `code`: assertion code (see below)
+  - `target`: the node or triple the finding refers to (URI/blank node object, or full triple)
+  - `message`: human-readable explanation
+
+- **`labels`** — Array of label entries (one per URI/blank node): `node` (type, value, label) and `triples` (triples that node participates in). Used for context; not used to decide pass/fail.
+
+**Assertion codes and how to fix:**
+
+| Code | Meaning | Fix |
+|------|---------|-----|
+| `uri-label-identical` | URI has no usable label; rendered label equals the URI. | Add `rdfs:label "Human Readable Name"@en` in the **ontology** (e.g. `KGCPMart-OWL.ttl`) for that property or class, or ensure the URI is dereferenceable so Iolanta can load a label. |
+| `blank-label-identical` | Blank node has no usable label. | Add or fix label for that blank node in the data/ontology. |
+| `literal-looks-like-uri` | Literal value looks like a URL. | Consider using a URI reference instead of a literal. |
+| `literal-looks-like-qname` | Literal value looks like a QName (e.g. `ex:foo`). | Consider using a URI reference instead of a literal. |
 
 ## Workflow
 
 1. Determine the file to validate (see "Argument: file path" above).
-2. Run `iolanta <file> --as labeled-triple-set` using the file path from step 1.
-3. Scan output for any non-empty `feedback` (e.g. `grep -A1 '"feedback"'` and look for content between the brackets).
-4. For each reported URI, add or fix `rdfs:label` in the appropriate file (ontology for classes/properties, data file only if it's local to that file).
-5. Re-run iolanta and confirm all `feedback` arrays are empty.
+2. Run `iolanta <file> --as kglint/json` using the file path from step 1, with **maximum timeout** (e.g. 600000 ms) so remote loading can complete.
+3. Parse the JSON and check **`assertions`**. If `assertions` is not empty, there are issues to fix.
+4. For each assertion, use `code`, `target`, and `message` to fix (e.g. add `rdfs:label` in the ontology for `uri-label-identical`; fix literals for literal codes).
+5. Re-run `iolanta <file> --as kglint/json` and repeat until **`assertions`** is empty.
 
 ## Example invocation
 
 **User:** "validate another-order.ttl"  
-**Agent:** Determines file path → `another-order.ttl` → runs `iolanta another-order.ttl --as labeled-triple-set` → interprets output.
+**Agent:** Determines file path → `another-order.ttl` → runs `iolanta another-order.ttl --as kglint/json` → checks `assertions`; if empty, validation passed; otherwise fixes and re-runs.
 
 **User:** "run iolanta" (with `KGCPMart-OWL.ttl` open)  
-**Agent:** Uses focused file → runs `iolanta KGCPMart-OWL.ttl --as labeled-triple-set`.
+**Agent:** Uses focused file → runs `iolanta KGCPMart-OWL.ttl --as kglint/json`.
 
 ## Notes
 
